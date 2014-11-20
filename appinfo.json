@@ -1,19 +1,17 @@
 {
-    "appKeys": {},
-    "capabilities": [
-        "configurable"
-    ],
-    "companyName": "SetPebble",
-    "longName": "Escape the Room",
-    "projectType": "native",
-    "resources": {
-        "media": []
-    },
-    "shortName": "Escape the Room",
-    "uuid": "66779551-8f0c-4176-b001-8040665e9535",
-    "versionCode": 1,
-    "versionLabel": "0.0",
-    "watchapp": {
-        "watchface": false
-    }
+  "uuid":"66779551-8f0c-4176-b001-8040665e9535",
+  "shortName":"Escape the Room",
+  "longName":"Escape the Room",
+  "companyName":"SetPebble",
+  "versionCode":1,
+  "versionLabel":"0.0",
+  "capabilities":[ "configurable" ],
+  "projectType":"native",
+  "watchapp":{ "watchface":false },
+  "appKeys":{},
+  "resources":{
+    "media":[
+      { "menuIcon":true, "type":"png", "name":"APP_MENU", "file":"images/app-menu.png" },
+    ]
+  }
 }
