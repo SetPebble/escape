@@ -1,0 +1,19 @@
+{
+    "appKeys": {},
+    "capabilities": [
+        "configurable"
+    ],
+    "companyName": "SetPebble",
+    "longName": "Escape the Room",
+    "projectType": "native",
+    "resources": {
+        "media": []
+    },
+    "shortName": "Escape the Room",
+    "uuid": "66779551-8f0c-4176-b001-8040665e9535",
+    "versionCode": 1,
+    "versionLabel": "0.0",
+    "watchapp": {
+        "watchface": false
+    }
+}
