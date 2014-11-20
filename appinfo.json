@@ -1,6 +1,6 @@
 {
   "uuid":"66779551-8f0c-4176-b001-8040665e9535",
-  "shortName":"Escape the Room",
+  "shortName":"Escape Room",
   "longName":"Escape the Room",
   "companyName":"SetPebble",
   "versionCode":1,
@@ -11,7 +11,7 @@
   "appKeys":{},
   "resources":{
     "media":[
-      { "menuIcon":true, "type":"png", "name":"APP_MENU", "file":"images/app-menu.png" },
+      { "menuIcon":true, "type":"png", "name":"APP_MENU", "file":"images/app-menu.png" }
     ]
   }
 }
