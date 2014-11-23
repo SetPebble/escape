@@ -10,8 +10,12 @@ const int kRoomYTiles = 6;
 const int kRoomMaxWidth = 17 * LENGTH;
 const int kRoomMaxHeight = 6 * LENGTH;
 const int kMaxFraction = 16;
+const int kMenuInset = 20;
 const int kAltitudeThreshhold = (45 * TRIG_MAX_ANGLE) / 360;
 const int kTiltThreshhold = 400;      //  tilt threshhold
+const int kScrollMax = 4000;                //  maximum size
+const int kScrollHorizontalPadding = 4;     //  pixel padding
+const int kScrollVerticalPadding = 4;       //  pixel padding
 const int kTiltMaximum = 400;         //  tilt maximum
 const int kTiltIncrement = 10;        //  tilt increment
 const int kScreenWidth = 144;         //  screen width
@@ -44,16 +48,36 @@ const uint32_t kRooms[] = {
   RESOURCE_ID_ROOM_5_5, RESOURCE_ID_ROOM_6_5, RESOURCE_ID_ROOM_7_5, RESOURCE_ID_ROOM_8_5, RESOURCE_ID_ROOM_9_5,
   RESOURCE_ID_ROOM_10_5, RESOURCE_ID_ROOM_11_5, RESOURCE_ID_ROOM_12_5, RESOURCE_ID_ROOM_13_5, RESOURCE_ID_ROOM_14_5,
   RESOURCE_ID_ROOM_15_5, RESOURCE_ID_ROOM_16_5 };
+enum { section_inventory = 0, section_actions, section_settings, section_count };
+enum { menu_backlight = 0, menu_count };
+enum { action_info = 0, action_reset, action_count };
+const char* kNoInventory = "no items collected";
+const char* kInfoExplanation = "help text";
+const char* kResetExplanation = "clear items, timer";
+const char* kSettingsHeaders[] = { "Inventory", "Actions", "Settings" };
+const char* kActionsOptions[] = { "Instructions", "Reset" };
+const char* kSettingsOptions[] = { "Backlight" };
+const char* kMenuValuesBacklight[] = { "normal", "always on" };\
+const char* kInfoContents = "Here is the help text...";
+const uint32_t kActionsIcons[] = { RESOURCE_ID_ACTION_INFO, RESOURCE_ID_ACTION_RESET };
+const uint32_t kSettingsIcons[] = { RESOURCE_ID_SETTING_BACKLIGHT };
 
 //  variables
 
-static Window* window;
+static Window* window, * window_settings, * window_info;
+enum Setting { setting_backlight = 1 };
+static enum { backlight_normal = 0, backlight_on, backlight_count } backlight;
 static Layer* layer_screen;
+static MenuLayer* menu_settings;
 //static InverterLayer* inverter_layer;
 static uint8_t pixels[ROWBYTES * LENGTH], pvalues[LENGTH + 4], gauss[LENGTH * 5];
 static GBitmap bitmap_chunk;
 static GPoint pt_location, pt_fraction;
 static int n_zoom;
+static char str_temp[40];
+static MenuIndex menu_index;
+static TextLayer* text_content;
+static ScrollLayer* scroll_content;
 
 //  includes
 
@@ -221,6 +245,8 @@ void draw_object(GContext* context, uint32_t resource, GPoint pt, int n_zoom) {
 //  screen redraw
 
 void screen_update(Layer* layer, GContext* context) {
+  //  set color
+  graphics_context_set_fill_color(context, GColorWhite);
   //  zoom factor and length
   int n_factor = (1 << n_zoom);
   int n_length = LENGTH / n_factor;
@@ -250,7 +276,6 @@ void screen_update(Layer* layer, GContext* context) {
   //  remember the remainder
   GPoint pt_remainder = GPoint(pt_start.x * n_length - pt_topleft.x, pt_start.y * n_length - pt_topleft.y);
   //  clear edges
-  graphics_context_set_fill_color(context, GColorWhite);
   if (pt_remainder.y > 0)
     graphics_fill_rect(context, GRect(0, 0, kScreenWidth, pt_remainder.y), 0, GCornerNone);
   if (pt_remainder.y + (pt_end.y - pt_start.y) * n_length < kScreenHeight)
@@ -268,6 +293,185 @@ void screen_update(Layer* layer, GContext* context) {
       if ((n_img >= 0) && (n_img < (int) ARRAY_LENGTH(kRooms)))
         draw_object(context, kRooms[n_img], GPoint(pt_remainder.x + (pt.x - pt_start.x) * n_length, pt_remainder.y + (pt.y - pt_start.y) * n_length), n_zoom);
     }
+}
+
+//  info window
+
+void info_load(Window* window) {
+  //  contents
+  scroll_content = scroll_layer_create(GRect(0, 0, 144, 168));
+  scroll_layer_set_content_size(scroll_content, GSize(144, kScrollMax));
+  text_content = text_layer_create(GRect(kScrollHorizontalPadding, 0, 144 - 2 * kScrollHorizontalPadding, kScrollMax));
+  text_layer_set_background_color(text_content, GColorWhite);
+  text_layer_set_text_color(text_content, GColorBlack);
+  text_layer_set_font(text_content, fonts_get_system_font(FONT_KEY_GOTHIC_18));
+  text_layer_set_text_alignment(text_content, GTextAlignmentLeft);
+  scroll_layer_add_child(scroll_content, text_layer_get_layer(text_content));
+  scroll_layer_set_click_config_onto_window(scroll_content, window);
+  //  trim text layer and scroll content to fit text box
+  text_layer_set_text(text_content, kInfoContents);
+  //  calculate text size
+  GSize max_size = text_layer_get_content_size(text_content);
+  max_size.h += kScrollVerticalPadding;
+  GRect rect = layer_get_frame(scroll_layer_get_layer(scroll_content));
+  if (max_size.h < rect.size.h)
+    max_size.h = rect.size.h;
+  //  trim text layer and scroll content to fit text box
+  text_layer_set_size(text_content, max_size);
+  scroll_layer_set_content_size(scroll_content, GSize(144, max_size.h));
+  layer_add_child(window_get_root_layer(window), scroll_layer_get_layer(scroll_content));
+}
+
+void info_unload(Window* window) {
+  //  free layers
+  text_layer_destroy(text_content);
+  scroll_layer_destroy(scroll_content);
+}
+
+//  menu handlers
+
+uint16_t menu_get_num_sections(MenuLayer* menu, void* data) {
+  return section_count;
+}
+
+uint16_t menu_get_num_rows(MenuLayer* menu, uint16_t section_index, void* data) {
+  return (section_index == section_inventory) ? 1 : ((section_index == section_actions) ? action_count : menu_count);
+}
+
+int16_t menu_get_header_height(MenuLayer* menu, uint16_t section_index, void* data) {
+  return MENU_CELL_BASIC_HEADER_HEIGHT;
+}
+
+void menu_draw_header(GContext* context, const Layer* cell_layer, uint16_t section_index, void* data) {
+  menu_cell_basic_header_draw(context, cell_layer, kSettingsHeaders[section_index]);
+}
+
+void menu_draw_row(GContext* context, const Layer* cell_layer, MenuIndex* cell_index, void* data) {
+  const char* str_title = NULL;
+  *str_temp = '\0';
+  uint32_t n_icon = 0;
+  switch (cell_index->section) {
+    case section_inventory:
+      str_title = kNoInventory;
+      break;
+    case section_actions:
+      str_title = kActionsOptions[cell_index->row];
+      n_icon = kActionsIcons[cell_index->row];
+      switch (cell_index->row) {
+        case action_info:
+          strcpy(str_temp, kInfoExplanation);
+          break;
+        case action_reset:
+          strcpy(str_temp, kResetExplanation);
+          break;
+      }
+      break;
+    case section_settings:
+      str_title = kSettingsOptions[cell_index->row];
+      n_icon = kSettingsIcons[cell_index->row];
+      switch (cell_index->row) {
+        case menu_backlight:
+          strcpy(str_temp, kMenuValuesBacklight[backlight]);
+          break;
+      }
+      break;
+  }
+  if (str_title) {
+    GBitmap* bitmap_icon = n_icon ? gbitmap_create_with_resource(n_icon) : NULL;
+    menu_cell_basic_draw(context, cell_layer, str_title, str_temp, bitmap_icon);
+    if (bitmap_icon)
+      gbitmap_destroy(bitmap_icon);
+  }
+}
+
+void menu_sync_and_persist(int setting, int value) {
+  //sync_set_value(setting, value);
+  persist_write_int(setting, value);
+}
+
+void menu_select(MenuLayer* menu, MenuIndex* cell_index, void* data) {
+  switch (cell_index->section) {
+    case section_inventory:
+      //  TODO:
+      break;
+    case section_actions:
+      switch (cell_index->row) {
+        case action_info:
+          //  initialize help window
+          window_info = window_create();
+          window_set_fullscreen(window_info, true);
+          window_set_background_color(window_info, GColorWhite);
+          window_set_window_handlers(window_info, (WindowHandlers) {
+            .load = info_load,
+            .unload = info_unload
+          });
+          window_stack_push(window_info, true);
+          break;
+        case action_reset:
+          //  TODO:
+          break;
+      }
+      break;
+    case section_settings:
+      switch (cell_index->row) {
+        case menu_backlight:
+          backlight = (backlight + 1) % backlight_count;
+          if (backlight != backlight_on) {
+            light_enable(false);
+            light_enable_interaction();
+          } else
+            light_enable(true);
+          menu_sync_and_persist(setting_backlight, backlight);
+          break;
+      }
+      break;
+  }
+  /*
+  //  update setting
+  switch (cell_index->row) {
+    case menu_backlight:
+      backlight = (backlight + 1) % backlight_count;
+      if (backlight != backlight_on) {
+        light_enable(false);
+        light_enable_interaction();
+      } else
+        light_enable(true);
+      menu_sync_and_persist(setting_backlight, backlight);
+      break;
+  }
+  */
+  //  redraw
+  layer_mark_dirty(menu_layer_get_layer(menu_settings));
+}
+
+void menu_load(Window* window) {
+  //  settings menu
+  menu_settings = menu_layer_create(GRect(0, 0, 144, 168));
+  //  set menu callbacks
+  menu_layer_set_callbacks(menu_settings, NULL, (MenuLayerCallbacks) {
+    .get_num_sections = menu_get_num_sections,
+    .get_num_rows = menu_get_num_rows,
+    .get_header_height = menu_get_header_height,
+    .draw_header = menu_draw_header,
+    .draw_row = menu_draw_row,
+    .select_click = menu_select
+  });
+  //  bind the buttons
+  menu_layer_set_click_config_onto_window(menu_settings, window);
+  //  set default selection
+  menu_layer_set_selected_index(menu_settings, menu_index, MenuRowAlignCenter, false);
+  //  add to window
+  layer_add_child(window_get_root_layer(window), menu_layer_get_layer(menu_settings));
+}
+
+void menu_unload(Window* window) {
+  //  remember selection
+  menu_index = menu_layer_get_selected_index(menu_settings);
+  //  free menu layer
+  menu_layer_destroy(menu_settings);
+  menu_settings = NULL;
+  //  free window memory
+  window_destroy(window_settings);
 }
 
 //  accelerometer
@@ -349,17 +553,26 @@ static void tick_callback(struct tm* tick_time, TimeUnits units_changed) {
 
 //  buttons
 
-void handler_up(ClickRecognizerRef recognizer, void* context) {
+void button_up(ClickRecognizerRef recognizer, void* context) {
   if (n_zoom > 0) {
     n_zoom--;
     layer_mark_dirty(layer_screen);
   }
 }
 
-void handler_select(ClickRecognizerRef recognizer, void* context) {
+void button_select(ClickRecognizerRef recognizer, void* context) {
+  //  initialize settings window
+  window_settings = window_create();
+  window_set_fullscreen(window_settings, true);
+  window_set_background_color(window_settings, GColorWhite);
+  window_set_window_handlers(window_settings, (WindowHandlers) {
+    .load = menu_load,
+    .unload = menu_unload
+  });
+  window_stack_push(window_settings, true);
 }
 
-void handler_down(ClickRecognizerRef recognizer, void* context) {
+void button_down(ClickRecognizerRef recognizer, void* context) {
   if (n_zoom < kZoomMax) {
     n_zoom++;
     layer_mark_dirty(layer_screen);
@@ -368,9 +581,9 @@ void handler_down(ClickRecognizerRef recognizer, void* context) {
 
 void config_provider(void* context) {
   //  set select handlers
-  window_single_click_subscribe(BUTTON_ID_SELECT, handler_select);
-  window_single_click_subscribe(BUTTON_ID_UP, handler_up);
-  window_single_click_subscribe(BUTTON_ID_DOWN, handler_down);
+  window_single_click_subscribe(BUTTON_ID_SELECT, button_select);
+  window_single_click_subscribe(BUTTON_ID_UP, button_up);
+  window_single_click_subscribe(BUTTON_ID_DOWN, button_down);
 }
 
 //  window functions
@@ -385,7 +598,7 @@ static void window_load(Window* window) {
     .info_flags = 1,
     .row_size_bytes = ROWBYTES,  // 4*ceiling(LENGTH/32)
   };
-  //  weather
+  //  screen
   layer_screen = layer_create(GRect(0, 0, 144, 168));
   layer_set_update_proc(layer_screen, screen_update);
   layer_add_child(layer_root, layer_screen);
@@ -420,8 +633,7 @@ int main(void) {
   n_zoom = 1;
   memset(pixels, '\0', sizeof(pixels));
   memset(gauss, '\0', sizeof(gauss));
-  //  create splash window
-  //  TODO:
+  memset(&menu_index, '\0', sizeof(menu_index));
   //  create window
   window = window_create();
   window_set_window_handlers(window, (WindowHandlers) {
@@ -432,12 +644,29 @@ int main(void) {
   window_set_fullscreen(window, true);
   window_set_click_config_provider(window, config_provider);
   window_stack_push(window, true);
-  //  backlight
-#if  kDebug
-  light_enable(true);
-#endif
+  //  persistence
+  for (int i = setting_backlight;  i <= setting_backlight;  i++) {
+    if (persist_exists(i)) {
+      int value = persist_read_int(i);
+      if (value >= 0)
+        switch (i) {
+          case setting_backlight:
+            if (value < backlight_count)
+              backlight = value;
+            break;
+        }
+    }
+  }
+  //  activate backlight
+  if (backlight == backlight_on)
+    light_enable(true);
   //  main event loop
   app_event_loop();
+  //  reset backlight
+  if (backlight == backlight_on) {
+    light_enable(false);
+    light_enable_interaction();
+  }
   //  backlight off
 #if  kDebug
   light_enable(false);

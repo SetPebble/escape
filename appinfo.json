@@ -12,6 +12,9 @@
   "resources":{
     "media":[
       { "menuIcon":true, "type":"png", "name":"APP_MENU", "file":"images/app-menu.png" },
+      { "type":"png", "name":"ACTION_INFO", "file":"images/action-info.png" },
+      { "type":"png", "name":"ACTION_RESET", "file":"images/action-reset.png" },
+      { "type":"png", "name":"SETTING_BACKLIGHT", "file":"images/setting-backlight.png" },
       { "type":"raw", "name":"ROOM_0_0", "file":"data/room_0_0.pbt" },
       { "type":"raw", "name":"ROOM_0_1", "file":"data/room_0_1.pbt" },
       { "type":"raw", "name":"ROOM_0_2", "file":"data/room_0_2.pbt" },
