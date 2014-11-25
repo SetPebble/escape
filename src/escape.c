@@ -3,26 +3,27 @@
 //  constants
 
 #define  kDebug  1
-#define  LENGTH  96
-#define  ROWBYTES  LENGTH / 8
-const int kRoomXTiles = 17;
-const int kRoomYTiles = 6;
-const int kRoomMaxWidth = 17 * LENGTH;
-const int kRoomMaxHeight = 6 * LENGTH;
-const int kMaxFraction = 16;
-const int kMenuInset = 20;
-const int kAltitudeThreshhold = (45 * TRIG_MAX_ANGLE) / 360;
-const int kTiltThreshhold = 400;      //  tilt threshhold
+#define  LENGTH  96                         //  length of room tile in pixels
+#define  ROWBYTES  LENGTH / 8               //  bytes per row
+const int kRoomXTiles = 17;                 //  number of horizontal tiles
+const int kRoomYTiles = 6;                  //  number of vertical tiles
+const int kRoomMaxWidth = 17 * LENGTH;      //  room width in pixels
+const int kRoomMaxHeight = 6 * LENGTH;      //  room height in pixels
+const int kMaxFraction = 16;                //  used for partial location increment
+const int kAltitudeThreshhold = (30 * TRIG_MAX_ANGLE) / 360;
+const int kAltitudeRange = (120 * TRIG_MAX_ANGLE) / 360;
+const int kTiltThreshhold = 400;            //  tilt threshhold
+const int kObjectMargin = 12;               //  selectable area around object
 const int kScrollMax = 4000;                //  maximum size
 const int kScrollHorizontalPadding = 4;     //  pixel padding
 const int kScrollVerticalPadding = 4;       //  pixel padding
-const int kTiltMaximum = 400;         //  tilt maximum
-const int kTiltIncrement = 10;        //  tilt increment
-const int kScreenWidth = 144;         //  screen width
-const int kGaussianThreshhold3 = 11;  //  threshhold for gaussian filter (3-tap)
-const int kGaussianThreshhold5 = 200; //  threshhold for gaussian filter (5-tap)
-const int kScreenHeight = 168;        //  screen height
-const int kZoomMax = 2;               //  maximum zoom level
+const int kTiltMaximum = 400;               //  tilt maximum
+const int kTiltIncrement = 10;              //  tilt increment
+const int kScreenWidth = 144;               //  screen width
+const int kGaussianThreshhold3 = 11;        //  threshhold for gaussian filter (3-tap)
+const int kGaussianThreshhold5 = 200;       //  threshhold for gaussian filter (5-tap)
+const int kScreenHeight = 168;              //  screen height
+const int kZoomMax = 2;                     //  maximum zoom level
 const uint32_t kRooms[] = {
   RESOURCE_ID_ROOM_0_0, RESOURCE_ID_ROOM_1_0, RESOURCE_ID_ROOM_2_0, RESOURCE_ID_ROOM_3_0, RESOURCE_ID_ROOM_4_0,
   RESOURCE_ID_ROOM_5_0, RESOURCE_ID_ROOM_6_0, RESOURCE_ID_ROOM_7_0, RESOURCE_ID_ROOM_8_0, RESOURCE_ID_ROOM_9_0,
@@ -49,24 +50,56 @@ const uint32_t kRooms[] = {
   RESOURCE_ID_ROOM_10_5, RESOURCE_ID_ROOM_11_5, RESOURCE_ID_ROOM_12_5, RESOURCE_ID_ROOM_13_5, RESOURCE_ID_ROOM_14_5,
   RESOURCE_ID_ROOM_15_5, RESOURCE_ID_ROOM_16_5 };
 enum { section_inventory = 0, section_actions, section_settings, section_count };
-enum { menu_backlight = 0, menu_count };
+enum { menu_backlight = 0, menu_tilt, menu_count };
 enum { action_info = 0, action_reset, action_count };
 const char* kNoInventory = "no items collected";
+//const char* kNothingToSelect = "nothing to select here";
+const char* kNothingToSelect = "why is this text uncentered?";
 const char* kInfoExplanation = "help text";
 const char* kResetExplanation = "clear items, timer";
 const char* kSettingsHeaders[] = { "Inventory", "Actions", "Settings" };
 const char* kActionsOptions[] = { "Instructions", "Reset" };
-const char* kSettingsOptions[] = { "Backlight" };
-const char* kMenuValuesBacklight[] = { "normal", "always on" };\
+const char* kSettingsOptions[] = { "Backlight", "Tilt" };
+const char* kMenuValuesBacklight[] = { "normal", "always on" };
+const char* kMenuValuesTilt[] = { "flat", "45 degrees", "upright" };
 const char* kInfoContents = "Here is the help text...";
 const uint32_t kActionsIcons[] = { RESOURCE_ID_ACTION_INFO, RESOURCE_ID_ACTION_RESET };
-const uint32_t kSettingsIcons[] = { RESOURCE_ID_SETTING_BACKLIGHT };
+const uint32_t kSettingsIcons[] = { RESOURCE_ID_SETTING_BACKLIGHT, RESOURCE_ID_SETTING_TILT };
+
+//  objects
+
+typedef struct {
+  char* name, * description;
+  uint32_t image, icon;
+  GPoint location;
+  GSize size;
+  bool visible, selectable, inventory;
+} Object;
+enum { obj_screwdriver };
+static Object objects[] = {
+    { "screwdriver", "flat-head",
+      RESOURCE_ID_OBJECT_SCREWDRIVER, RESOURCE_ID_ICON_SCREWDRIVER,
+      { 656, 400 }, { 36, 12 },
+      true, true, false
+    }
+};
+
+//  rules
+
+typedef struct {
+  GRect rect;
+} Rule;
+static Rule rules[] = {
+  //  screwdriver area
+  { { { 632, 376 }, { 88, 36 } } }
+};
 
 //  variables
 
 static Window* window, * window_settings, * window_info;
-enum Setting { setting_backlight = 1 };
+enum Setting { setting_backlight = 1, setting_tilt };
 static enum { backlight_normal = 0, backlight_on, backlight_count } backlight;
+static enum { tilt_flat = 0, tilt_45, tilt_upright, tilt_count } tilt;
 static Layer* layer_screen;
 static MenuLayer* menu_settings;
 //static InverterLayer* inverter_layer;
@@ -82,6 +115,7 @@ static ScrollLayer* scroll_content;
 //  includes
 
 //#include "app_sync.c.inc"     //  communication
+#include "toast.c.inc"     //  toast messages
 
 //  unpack and draw object
 
@@ -293,6 +327,20 @@ void screen_update(Layer* layer, GContext* context) {
       if ((n_img >= 0) && (n_img < (int) ARRAY_LENGTH(kRooms)))
         draw_object(context, kRooms[n_img], GPoint(pt_remainder.x + (pt.x - pt_start.x) * n_length, pt_remainder.y + (pt.y - pt_start.y) * n_length), n_zoom);
     }
+  //  overlay objects
+  for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
+    Object* obj = objects + i;
+    if (obj->visible) {
+      //  calculate starting point
+      pt = GPoint(obj->location.x / n_factor - pt_topleft.x, obj->location.y / n_factor - pt_topleft.y);
+      //APP_LOG(APP_LOG_LEVEL_DEBUG, "%s  pt=%d,%d", obj->name, pt.x, pt.y);
+      //  check object against screen boundary
+      if ((pt.x + obj->size.w > 0) && (pt.x < kScreenWidth) &&
+          (pt.y + obj->size.h > 0) && (pt.y < kScreenHeight))
+        //  draw the object
+        draw_object(context, obj->image, pt, n_zoom);
+    }
+  }
 }
 
 //  info window
@@ -335,7 +383,14 @@ uint16_t menu_get_num_sections(MenuLayer* menu, void* data) {
 }
 
 uint16_t menu_get_num_rows(MenuLayer* menu, uint16_t section_index, void* data) {
-  return (section_index == section_inventory) ? 1 : ((section_index == section_actions) ? action_count : menu_count);
+  if (section_index == section_inventory) {
+    int count = 0;
+    for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++)
+      if (objects[i].inventory)
+        count++;
+    return (count > 0) ? count : 1;
+  } else
+    return (section_index == section_actions) ? action_count : menu_count;
 }
 
 int16_t menu_get_header_height(MenuLayer* menu, uint16_t section_index, void* data) {
@@ -352,8 +407,21 @@ void menu_draw_row(GContext* context, const Layer* cell_layer, MenuIndex* cell_i
   uint32_t n_icon = 0;
   switch (cell_index->section) {
     case section_inventory:
-      str_title = kNoInventory;
-      break;
+     {int count = 0;
+      for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
+        Object* obj = objects + i;
+        if (obj->inventory)
+          if (count++ == cell_index->row) {
+            str_title = obj->name;
+            if (obj->description)
+              strcpy(str_temp, obj->description);
+            n_icon = obj->icon;
+            break;
+          }
+      }
+      if (!str_title)
+        str_title = kNoInventory;
+     }break;
     case section_actions:
       str_title = kActionsOptions[cell_index->row];
       n_icon = kActionsIcons[cell_index->row];
@@ -372,6 +440,9 @@ void menu_draw_row(GContext* context, const Layer* cell_layer, MenuIndex* cell_i
       switch (cell_index->row) {
         case menu_backlight:
           strcpy(str_temp, kMenuValuesBacklight[backlight]);
+          break;
+        case menu_tilt:
+          strcpy(str_temp, kMenuValuesTilt[tilt]);
           break;
       }
       break;
@@ -392,8 +463,16 @@ void menu_sync_and_persist(int setting, int value) {
 void menu_select(MenuLayer* menu, MenuIndex* cell_index, void* data) {
   switch (cell_index->section) {
     case section_inventory:
-      //  TODO:
-      break;
+     {int count = 0;
+      for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
+        Object* obj = objects + i;
+        if (obj->inventory)
+          if (count++ == cell_index->row) {
+            //  TODO
+            break;
+          }
+      }
+     }break;
     case section_actions:
       switch (cell_index->row) {
         case action_info:
@@ -423,23 +502,13 @@ void menu_select(MenuLayer* menu, MenuIndex* cell_index, void* data) {
             light_enable(true);
           menu_sync_and_persist(setting_backlight, backlight);
           break;
+        case menu_tilt:
+          tilt = (tilt + 1) % tilt_count;
+          menu_sync_and_persist(setting_tilt, tilt);
+          break;
       }
       break;
   }
-  /*
-  //  update setting
-  switch (cell_index->row) {
-    case menu_backlight:
-      backlight = (backlight + 1) % backlight_count;
-      if (backlight != backlight_on) {
-        light_enable(false);
-        light_enable_interaction();
-      } else
-        light_enable(true);
-      menu_sync_and_persist(setting_backlight, backlight);
-      break;
-  }
-  */
   //  redraw
   layer_mark_dirty(menu_layer_get_layer(menu_settings));
 }
@@ -508,12 +577,13 @@ static void accel_callback(AccelData* accel_data, uint32_t num_samples) {
       }
     }
     //  altitude
-    int n_altitude = atan2_lookup(-accel_data->y, -accel_data->z);
-    if ((n_altitude < kAltitudeThreshhold) || (n_altitude >= TRIG_MAX_ANGLE - kAltitudeThreshhold)) {
-      n_altitude = (n_altitude < TRIG_MAX_ANGLE / 2)
-                     ? kAltitudeThreshhold - n_altitude
-                     : kAltitudeThreshhold + (TRIG_MAX_ANGLE - n_altitude);
-      pt_fraction.y += (kTiltIncrement * n_altitude * kMaxFraction) / (2 * kAltitudeThreshhold);
+    int n_altitude = (TRIG_MAX_ANGLE + atan2_lookup(-accel_data->y, -accel_data->z) - (tilt * TRIG_MAX_ANGLE) / 8) % TRIG_MAX_ANGLE;
+    if (n_altitude > TRIG_MAX_ANGLE / 2)
+      n_altitude = n_altitude - TRIG_MAX_ANGLE;
+    //APP_LOG(APP_LOG_LEVEL_DEBUG, "%d", (n_altitude * 360) / TRIG_MAX_ANGLE);
+    if ((n_altitude > kAltitudeThreshhold) && (n_altitude < kAltitudeThreshhold + kAltitudeRange)) {
+      n_altitude -= kAltitudeThreshhold;
+      pt_fraction.y += (kTiltIncrement * n_altitude * kMaxFraction) / kAltitudeRange;
       while (pt_fraction.y >= kMaxFraction) {
         if (pt_location.y < kRoomMaxHeight - 168 / 2) {
           pt_location.y++;
@@ -521,9 +591,9 @@ static void accel_callback(AccelData* accel_data, uint32_t num_samples) {
         }
         pt_fraction.y -= kMaxFraction;
       }
-    } else if ((n_altitude > TRIG_MAX_ANGLE / 4) && (n_altitude < TRIG_MAX_ANGLE / 4 + 2 * kAltitudeThreshhold)) {
-      n_altitude -= TRIG_MAX_ANGLE / 4;
-      pt_fraction.y -= (kTiltIncrement * n_altitude * kMaxFraction) / (2 * kAltitudeThreshhold);
+    } else if ((n_altitude < -kAltitudeThreshhold) && (n_altitude < kAltitudeThreshhold + kAltitudeRange)) {
+      n_altitude += kAltitudeThreshhold;
+      pt_fraction.y += (kTiltIncrement * n_altitude * kMaxFraction) / kAltitudeRange;
       while (pt_fraction.y < 0) {
         if (pt_location.y > 168 / 2) {
           pt_location.y--;
@@ -561,6 +631,47 @@ void button_up(ClickRecognizerRef recognizer, void* context) {
 }
 
 void button_select(ClickRecognizerRef recognizer, void* context) {
+  int i, n_margin = kObjectMargin / (1 << n_zoom);
+  //  check for selectable objects
+  for (i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
+    Object* obj = objects + i;
+    if (obj->visible && obj->selectable && !obj->inventory &&
+        (pt_location.x >= obj->location.x - n_margin) && (pt_location.x < obj->location.x + obj->size.w + n_margin) &&
+        (pt_location.y >= obj->location.y - n_margin) && (pt_location.y < obj->location.y + obj->size.h + n_margin)) {
+      //  select object
+      obj->visible = false;
+      obj->inventory = true;
+      layer_mark_dirty(layer_screen);
+      //  message
+      snprintf(str_temp, sizeof(str_temp), "you now have a %s", obj->name);
+      toast_show(str_temp);
+      APP_LOG(APP_LOG_LEVEL_DEBUG, "object %s selected", obj->name);
+      return;
+    }
+  }
+  //  check rules
+  for (int i = 0;  i < (int) ARRAY_LENGTH(rules);  i++) {
+    Rule* rule = rules + i;
+    if ((pt_location.x >= rule->rect.origin.x) && (pt_location.x < rule->rect.origin.x + rule->rect.size.w) &&
+        (pt_location.y >= rule->rect.origin.y) && (pt_location.y < rule->rect.origin.y + rule->rect.size.h)) {
+      APP_LOG(APP_LOG_LEVEL_DEBUG, "rule %d triggered", i);
+      //  TODO:
+      return;
+    }
+  }
+  //  nothing selected
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "nothing at %d,%d", pt_location.x, pt_location.y);
+  toast_show(kNothingToSelect);
+}
+
+void button_down(ClickRecognizerRef recognizer, void* context) {
+  if (n_zoom < kZoomMax) {
+    n_zoom++;
+    layer_mark_dirty(layer_screen);
+  }
+}
+
+void button_long(ClickRecognizerRef recognizer, void* context) {
   //  initialize settings window
   window_settings = window_create();
   window_set_fullscreen(window_settings, true);
@@ -572,18 +683,14 @@ void button_select(ClickRecognizerRef recognizer, void* context) {
   window_stack_push(window_settings, true);
 }
 
-void button_down(ClickRecognizerRef recognizer, void* context) {
-  if (n_zoom < kZoomMax) {
-    n_zoom++;
-    layer_mark_dirty(layer_screen);
-  }
-}
-
 void config_provider(void* context) {
   //  set select handlers
   window_single_click_subscribe(BUTTON_ID_SELECT, button_select);
   window_single_click_subscribe(BUTTON_ID_UP, button_up);
   window_single_click_subscribe(BUTTON_ID_DOWN, button_down);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 0, button_long, NULL);
+  window_long_click_subscribe(BUTTON_ID_UP, 0, button_long, NULL);
+  window_long_click_subscribe(BUTTON_ID_DOWN, 0, button_long, NULL);
 }
 
 //  window functions
@@ -628,19 +735,23 @@ static void window_unload(Window* window) {
 
 int main(void) {
   //  initialize variables
+  backlight = backlight_normal;
+  tilt = tilt_flat;
   pt_location = GPoint(kRoomMaxWidth / 2, kRoomMaxHeight / 2);
   pt_fraction = GPoint(kMaxFraction / 2, kMaxFraction / 2);
   n_zoom = 1;
   memset(pixels, '\0', sizeof(pixels));
   memset(gauss, '\0', sizeof(gauss));
   memset(&menu_index, '\0', sizeof(menu_index));
+  //  modules
+  toast_init();
   //  create window
   window = window_create();
   window_set_window_handlers(window, (WindowHandlers) {
     .load = window_load,
     .unload = window_unload,
   });
-  window_set_background_color(window, GColorBlack);
+  window_set_background_color(window, GColorWhite);
   window_set_fullscreen(window, true);
   window_set_click_config_provider(window, config_provider);
   window_stack_push(window, true);
@@ -653,6 +764,10 @@ int main(void) {
           case setting_backlight:
             if (value < backlight_count)
               backlight = value;
+            break;
+          case setting_tilt:
+            if (value < tilt_count)
+              tilt = value;
             break;
         }
     }
@@ -667,6 +782,8 @@ int main(void) {
     light_enable(false);
     light_enable_interaction();
   }
+  //  modules
+  toast_deinit();
   //  backlight off
 #if  kDebug
   light_enable(false);
