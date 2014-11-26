@@ -53,8 +53,8 @@ enum { section_inventory = 0, section_actions, section_settings, section_count }
 enum { menu_backlight = 0, menu_tilt, menu_count };
 enum { action_info = 0, action_reset, action_count };
 const char* kNoInventory = "no items collected";
-//const char* kNothingToSelect = "nothing to select here";
-const char* kNothingToSelect = "why is this text uncentered?";
+const char* kNothingToSelect = "nothing to select here";
+//const char* kNothingToSelect = "why is this text uncentered?";
 const char* kInfoExplanation = "help text";
 const char* kResetExplanation = "clear items, timer";
 const char* kSettingsHeaders[] = { "Inventory", "Actions", "Settings" };
@@ -102,7 +102,6 @@ static enum { backlight_normal = 0, backlight_on, backlight_count } backlight;
 static enum { tilt_flat = 0, tilt_45, tilt_upright, tilt_count } tilt;
 static Layer* layer_screen;
 static MenuLayer* menu_settings;
-//static InverterLayer* inverter_layer;
 static uint8_t pixels[ROWBYTES * LENGTH], pvalues[LENGTH + 4], gauss[LENGTH * 5];
 static GBitmap bitmap_chunk;
 static GPoint pt_location, pt_fraction;
@@ -709,10 +708,6 @@ static void window_load(Window* window) {
   layer_screen = layer_create(GRect(0, 0, 144, 168));
   layer_set_update_proc(layer_screen, screen_update);
   layer_add_child(layer_root, layer_screen);
-  //  inverter layer
-  //inverter_layer = inverter_layer_create(GRect(0, 0, 144, 168));
-  //layer_add_child(layer_root, inverter_layer_get_layer(inverter_layer));
-  //layer_set_hidden(inverter_layer_get_layer(inverter_layer), screen == screen_normal);
   //  tick service
   tick_timer_service_subscribe(SECOND_UNIT, tick_callback);
   //  accelerometer subscription
@@ -727,8 +722,6 @@ static void window_unload(Window* window) {
   //accel_data_service_unsubscribe();   //  commented out to prevent crashing in firmware 2.7/2.8
   //  free layers
   layer_destroy(layer_screen);
-  //  free inverter
-  //inverter_layer_destroy(inverter_layer);
 }
 
 //  main function

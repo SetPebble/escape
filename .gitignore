@@ -1,3 +1,4 @@
 /dev
 /.lock-waf_darwin_build
 /build/
+/.settings/
