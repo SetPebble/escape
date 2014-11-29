@@ -1,6 +1,4 @@
 //  file: toast.c.inc
-//  desc: Pebble app for controlling iControl devices
-//  auth: Matthew Clark, SetPebble
 
 //  constants
 

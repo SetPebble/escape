@@ -14,14 +14,9 @@ const int kAltitudeThreshhold = (30 * TRIG_MAX_ANGLE) / 360;
 const int kAltitudeRange = (120 * TRIG_MAX_ANGLE) / 360;
 const int kTiltThreshhold = 400;            //  tilt threshhold
 const int kObjectMargin = 12;               //  selectable area around object
-const int kScrollMax = 4000;                //  maximum size
-const int kScrollHorizontalPadding = 4;     //  pixel padding
-const int kScrollVerticalPadding = 4;       //  pixel padding
 const int kTiltMaximum = 400;               //  tilt maximum
 const int kTiltIncrement = 10;              //  tilt increment
 const int kScreenWidth = 144;               //  screen width
-const int kGaussianThreshhold3 = 11;        //  threshhold for gaussian filter (3-tap)
-const int kGaussianThreshhold5 = 200;       //  threshhold for gaussian filter (5-tap)
 const int kScreenHeight = 168;              //  screen height
 const int kZoomMax = 2;                     //  maximum zoom level
 const uint32_t kRooms[] = {
@@ -49,231 +44,107 @@ const uint32_t kRooms[] = {
   RESOURCE_ID_ROOM_5_5, RESOURCE_ID_ROOM_6_5, RESOURCE_ID_ROOM_7_5, RESOURCE_ID_ROOM_8_5, RESOURCE_ID_ROOM_9_5,
   RESOURCE_ID_ROOM_10_5, RESOURCE_ID_ROOM_11_5, RESOURCE_ID_ROOM_12_5, RESOURCE_ID_ROOM_13_5, RESOURCE_ID_ROOM_14_5,
   RESOURCE_ID_ROOM_15_5, RESOURCE_ID_ROOM_16_5 };
-enum { section_inventory = 0, section_actions, section_settings, section_count };
-enum { menu_backlight = 0, menu_tilt, menu_count };
-enum { action_info = 0, action_reset, action_count };
-const char* kNoInventory = "no items collected";
+typedef enum { entry_digits = 0 } Entry;
 const char* kNothingToSelect = "nothing to select here";
-//const char* kNothingToSelect = "why is this text uncentered?";
 const char* kInfoExplanation = "help text";
-const char* kResetExplanation = "clear items, timer";
-const char* kSettingsHeaders[] = { "Inventory", "Actions", "Settings" };
-const char* kActionsOptions[] = { "Instructions", "Reset" };
-const char* kSettingsOptions[] = { "Backlight", "Tilt" };
-const char* kMenuValuesBacklight[] = { "normal", "always on" };
-const char* kMenuValuesTilt[] = { "flat", "45 degrees", "upright" };
-const char* kInfoContents = "Here is the help text...";
-const uint32_t kActionsIcons[] = { RESOURCE_ID_ACTION_INFO, RESOURCE_ID_ACTION_RESET };
-const uint32_t kSettingsIcons[] = { RESOURCE_ID_SETTING_BACKLIGHT, RESOURCE_ID_SETTING_TILT };
+
+//  states
+
+enum { state_none = -1, state_picture, state_safe };
+typedef struct {
+  bool value;
+} State;
+static State states[] = {
+  //  picture (closed, swung open)
+  { false },
+  //  safe  (locked, unlocked)
+  { false }
+};
+
+//  input screens
+
+enum { input_none = -1, input_safe = 0 };
+typedef struct __attribute__((__packed__)) {
+  Entry entry;
+  uint16_t value, correct;
+  int8_t changes;
+  const char* message;
+} Input;
+static Input inputs[] = {
+  { entry_digits, 0, 1234, state_safe, "the safe is open" }
+};
 
 //  objects
 
-typedef struct {
-  char* name, * description;
+enum { obj_screwdriver = 0 };
+typedef struct __attribute__((__packed__)) {
+  const char* name, * description;
   uint32_t image, icon;
   GPoint location;
   GSize size;
+  int8_t dependency;
   bool visible, selectable, inventory;
 } Object;
-enum { obj_screwdriver };
 static Object objects[] = {
+    //  screwdriver (selectable object)
     { "screwdriver", "flat-head",
       RESOURCE_ID_OBJECT_SCREWDRIVER, RESOURCE_ID_ICON_SCREWDRIVER,
       { 656, 400 }, { 36, 12 },
-      true, true, false
+      state_none, true, true, false
+    },
+    //
+    { "picture", NULL,
+      RESOURCE_ID_OBJECT_PICTURE, 0,
+      { 124, 176 }, { 44, 40 },
+      state_picture, true, false, false
+    },
+    //
+    { "safe", NULL,
+      RESOURCE_ID_OBJECT_SAFE, 0,
+      { 108, 176 }, { 60, 40 },
+      state_safe, true, false, false
     }
 };
 
 //  rules
 
-typedef struct {
+enum { rule_placeholder = 0 };
+typedef struct __attribute__((__packed__)) {
   GRect rect;
+  int8_t dependency, changes, input;
+  const char* message;
 } Rule;
 static Rule rules[] = {
-  //  screwdriver area
-  { { { 632, 376 }, { 88, 36 } } }
+  //  rule to input safe combination (before picture)  (
+  { { { 124, 176}, { 36, 40 } }, state_picture, state_safe, input_safe, NULL },
+  //  rule to open/close picture
+  { { { 124, 176}, { 44, 40 } }, state_none, state_picture, input_none, "you've found a safe" }
 };
 
 //  variables
 
-static Window* window, * window_settings, * window_info;
+static Window* window;
 enum Setting { setting_backlight = 1, setting_tilt };
 static enum { backlight_normal = 0, backlight_on, backlight_count } backlight;
 static enum { tilt_flat = 0, tilt_45, tilt_upright, tilt_count } tilt;
+static Entry entry;
 static Layer* layer_screen;
-static MenuLayer* menu_settings;
-static uint8_t pixels[ROWBYTES * LENGTH], pvalues[LENGTH + 4], gauss[LENGTH * 5];
-static GBitmap bitmap_chunk;
+static uint8_t input;
 static GPoint pt_location, pt_fraction;
-static int n_zoom;
+static int n_zoom, n_position;
 static char str_temp[40];
-static MenuIndex menu_index;
 static TextLayer* text_content;
 static ScrollLayer* scroll_content;
 
 //  includes
 
 //#include "app_sync.c.inc"     //  communication
-#include "toast.c.inc"     //  toast messages
-
-//  unpack and draw object
-
-void draw_object(GContext* context, uint32_t resource, GPoint pt, int n_zoom) {
-  memset(pixels, '\0', sizeof(pixels));
-  ResHandle res_handle = resource_get_handle(resource);
-  if (res_handle) {
-    //  get size
-    int n_size = resource_size(res_handle);
-    if (n_size) {
-      //  allocate buffer
-      uint8_t* buffer = malloc(n_size);
-      if (buffer) {
-        //  load resource
-        resource_load(res_handle, buffer, n_size);
-        //  get object size
-        register uint8_t* src = buffer;
-        int width = *(src++);
-        int height = *(src++);
-        int xbytes = (width + 7) / 8;
-        //  unpack image
-        int x = 0, y = 0;
-        while ((src < buffer + n_size) && (y < height)) {
-          int count = *src;
-          if (*src >= 128) {
-            //  repeat sequence
-            count = 257 - count;    //  2's complement conversion + 1
-            for (int i = 0;  i < count;  i++) {
-              pixels[ROWBYTES * y + x] = src[1];
-              if (++x >= xbytes) {
-                x = 0;
-                y++;
-                if (y >= height)
-                  break;
-              }
-            }
-            src += 2;
-          } else {
-            //  literal
-            count++;
-            for (int i = 0;  i < count;  i++) {
-              pixels[ROWBYTES * y + x] = src[i + 1];
-              if (++x >= xbytes) {
-                x = 0;
-                y++;
-                if (y >= height)
-                  break;
-              }
-            }
-            src += 1 + count;
-          }
-        }
-        //  zoom
-        if (n_zoom) {
-          switch (n_zoom) {
-            case 1:   //  zoom out level 1
-              //  get initial row - loop through columns and gather values from bits
-              for (x = 0;  x < width;  x++)
-                pvalues[x + 1] = (pixels[x / 8] & (1 << (x % 8))) ? 1 : 0;
-              //  extend
-              pvalues[0] = pvalues[1];
-              pvalues[1 + LENGTH] = pvalues[LENGTH];
-              //  horizontal filter
-              for (x = 0;  x < width;  x++)
-                gauss[x] = pvalues[x] + 2 * pvalues[x + 1] + pvalues[x + 2];
-              //  copy first row
-              memcpy(gauss + ROWBYTES * 2, gauss, LENGTH);
-              //  loop through rows
-              for (int y = 0;  y < height;  y++) {
-                //  check row
-                if (y < height - 1) {
-                  //  get next row - gather values from bits
-                  for (x = 0;  x < width;  x++)
-                    pvalues[x + 1] = (pixels[ROWBYTES * (y + 1) + x / 8] & (1 << (x % 8))) ? 1 : 0;
-                  //  extend
-                  pvalues[0] = pvalues[1];
-                  pvalues[1 + LENGTH] = pvalues[LENGTH];
-                  //  horizontal filter
-                  for (x = 0;  x < width;  x++)
-                    gauss[LENGTH * ((y + 1) % 3) + x] = pvalues[x] + 2 * pvalues[x + 1] + pvalues[x + 2];
-                } else
-                  memcpy(gauss + LENGTH * ((y + 1) % 3), gauss + LENGTH * y, LENGTH);
-                //  skip every other row
-                if (!(y % 2)) {
-                  //  clear pixel row
-                  memset(pixels + ROWBYTES * (y / 2), '\0', ROWBYTES / 2);
-                  //  vertical filter
-                  for (x = 0;  x < width;  x += 2)
-                    if (gauss[LENGTH * ((y + 2) % 3) + x] + 2 * gauss[LENGTH * (y % 3) + x] + gauss[LENGTH * ((y + 1) % 3) + x] > kGaussianThreshhold3)
-                      pixels[ROWBYTES * (y / 2) + (x / 16)] |= 1 << ((x / 2) % 8);
-                }
-              }
-#ifdef  SIMPLE_ZOOM_OUT_HORRIBLE_RESULTS
-              for (y = 0;  y < height;  y += 2) {
-                uint16_t* src1 = (uint16_t*) (pixels + (ROWBYTES * y));
-                uint8_t* dest1 = pixels + (ROWBYTES * y / 2);
-                for (x = 0;  x < width / 2;  x++)
-                  *(dest1++) = *(src1++) / 2;
-                  // *(dest1++) = (*(src1++) & *(src1a++)) / 2;
-              }
-#endif
-              break;
-            case 2:   //  zoom out level 2
-              //  loop through first two rows
-              for (y = 0;  y < 2;  y++) {
-                //  get initial two rows - loop through columns and gather values from bits
-                for (x = 0;  x < width;  x++)
-                  pvalues[x + 2] = (pixels[ROWBYTES * y + (x / 8)] & (1 << (x % 8))) ? 1 : 0;
-                //  extend
-                pvalues[0] = pvalues[1] = pvalues[2];
-                pvalues[LENGTH + 3] = pvalues[LENGTH + 2] = pvalues[LENGTH + 1];
-                //  horizontal 5-tap filter
-                for (x = 0;  x < width;  x++)
-                  gauss[LENGTH * y + x] = pvalues[x] + 4 * pvalues[x + 1] + 6 * pvalues[x + 2] + 4 * pvalues[x + 3] + pvalues[x + 4];
-              }
-              //  copy first two rows
-              memcpy(gauss + ROWBYTES * 3, gauss, LENGTH);
-              memcpy(gauss + ROWBYTES * 4, gauss, LENGTH);
-              //  loop through rows
-              for (int y = 0;  y < height;  y++) {
-                //  check row
-                if (y < height - 2) {
-                  //  get +2 row - gather values from bits
-                  for (x = 0;  x < width;  x++)
-                    pvalues[x + 2] = (pixels[ROWBYTES * (y + 2) + x / 8] & (1 << (x % 8))) ? 1 : 0;
-                  //  extend
-                  pvalues[0] = pvalues[1] = pvalues[2];
-                  pvalues[LENGTH + 3] = pvalues[LENGTH + 2] = pvalues[LENGTH + 1];
-                  //  horizontal 5-tap filter
-                  for (x = 0;  x < width;  x++)
-                    gauss[LENGTH * ((y + 2) % 5) + x] = pvalues[x] + 4 * pvalues[x + 1] + 6 * pvalues[x + 2] + 4 * pvalues[x + 3] + pvalues[x + 4];
-                } else
-                  memcpy(gauss + LENGTH * ((y + 2) % 5), gauss + LENGTH * ((y + 1) % 5), LENGTH);
-                //  only display every 4th row
-                if (!(y % 4)) {
-                  //  clear pixel row
-                  memset(pixels + ROWBYTES * (y / 4), '\0', ROWBYTES / 4);
-                  //  vertical filter
-                  for (x = 0;  x < width;  x += 4)
-                    if (gauss[LENGTH * ((y + 3) % 5) + x] + 4 * gauss[LENGTH * ((y + 4) % 5) + x] + 6 * gauss[LENGTH * (y % 5) + x] + 4 * gauss[LENGTH * ((y + 1) % 5) + x] + gauss[LENGTH * ((y + 2) % 5) + x] > kGaussianThreshhold5)
-                      pixels[ROWBYTES * (y / 4) + (x / 32)] |= 1 << ((x / 4) % 8);
-                }
-              }
-              break;
-          }
-          width /= (1 << n_zoom);
-          height /= (1 << n_zoom);
-        }
-        //  set bounds size
-        bitmap_chunk.bounds.size.w = width;
-        bitmap_chunk.bounds.size.h = height;
-        //  draw bitmap
-        graphics_draw_bitmap_in_rect(context, &bitmap_chunk, GRect(pt.x, pt.y, width, height));
-        //  free buffer
-        free(buffer);
-      }
-    }
-  }
-}
+#include "window.c.inc"     //  create window
+#include "draw.c.inc"       //  draw packbit image
+#include "toast.c.inc"      //  toast messages
+#include "info.c.inc"       //  info messages
+#include "entry.c.inc"      //  entry window
+#include "menu.c.inc"       //  entry window
 
 //  screen redraw
 
@@ -330,6 +201,9 @@ void screen_update(Layer* layer, GContext* context) {
   for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
     Object* obj = objects + i;
     if (obj->visible) {
+      //  check dependency
+      if ((obj->dependency >= 0) && !states[obj->dependency].value)
+        continue;
       //  calculate starting point
       pt = GPoint(obj->location.x / n_factor - pt_topleft.x, obj->location.y / n_factor - pt_topleft.y);
       //APP_LOG(APP_LOG_LEVEL_DEBUG, "%s  pt=%d,%d", obj->name, pt.x, pt.y);
@@ -340,206 +214,6 @@ void screen_update(Layer* layer, GContext* context) {
         draw_object(context, obj->image, pt, n_zoom);
     }
   }
-}
-
-//  info window
-
-void info_load(Window* window) {
-  //  contents
-  scroll_content = scroll_layer_create(GRect(0, 0, 144, 168));
-  scroll_layer_set_content_size(scroll_content, GSize(144, kScrollMax));
-  text_content = text_layer_create(GRect(kScrollHorizontalPadding, 0, 144 - 2 * kScrollHorizontalPadding, kScrollMax));
-  text_layer_set_background_color(text_content, GColorWhite);
-  text_layer_set_text_color(text_content, GColorBlack);
-  text_layer_set_font(text_content, fonts_get_system_font(FONT_KEY_GOTHIC_18));
-  text_layer_set_text_alignment(text_content, GTextAlignmentLeft);
-  scroll_layer_add_child(scroll_content, text_layer_get_layer(text_content));
-  scroll_layer_set_click_config_onto_window(scroll_content, window);
-  //  trim text layer and scroll content to fit text box
-  text_layer_set_text(text_content, kInfoContents);
-  //  calculate text size
-  GSize max_size = text_layer_get_content_size(text_content);
-  max_size.h += kScrollVerticalPadding;
-  GRect rect = layer_get_frame(scroll_layer_get_layer(scroll_content));
-  if (max_size.h < rect.size.h)
-    max_size.h = rect.size.h;
-  //  trim text layer and scroll content to fit text box
-  text_layer_set_size(text_content, max_size);
-  scroll_layer_set_content_size(scroll_content, GSize(144, max_size.h));
-  layer_add_child(window_get_root_layer(window), scroll_layer_get_layer(scroll_content));
-}
-
-void info_unload(Window* window) {
-  //  free layers
-  text_layer_destroy(text_content);
-  scroll_layer_destroy(scroll_content);
-}
-
-//  menu handlers
-
-uint16_t menu_get_num_sections(MenuLayer* menu, void* data) {
-  return section_count;
-}
-
-uint16_t menu_get_num_rows(MenuLayer* menu, uint16_t section_index, void* data) {
-  if (section_index == section_inventory) {
-    int count = 0;
-    for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++)
-      if (objects[i].inventory)
-        count++;
-    return (count > 0) ? count : 1;
-  } else
-    return (section_index == section_actions) ? action_count : menu_count;
-}
-
-int16_t menu_get_header_height(MenuLayer* menu, uint16_t section_index, void* data) {
-  return MENU_CELL_BASIC_HEADER_HEIGHT;
-}
-
-void menu_draw_header(GContext* context, const Layer* cell_layer, uint16_t section_index, void* data) {
-  menu_cell_basic_header_draw(context, cell_layer, kSettingsHeaders[section_index]);
-}
-
-void menu_draw_row(GContext* context, const Layer* cell_layer, MenuIndex* cell_index, void* data) {
-  const char* str_title = NULL;
-  *str_temp = '\0';
-  uint32_t n_icon = 0;
-  switch (cell_index->section) {
-    case section_inventory:
-     {int count = 0;
-      for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
-        Object* obj = objects + i;
-        if (obj->inventory)
-          if (count++ == cell_index->row) {
-            str_title = obj->name;
-            if (obj->description)
-              strcpy(str_temp, obj->description);
-            n_icon = obj->icon;
-            break;
-          }
-      }
-      if (!str_title)
-        str_title = kNoInventory;
-     }break;
-    case section_actions:
-      str_title = kActionsOptions[cell_index->row];
-      n_icon = kActionsIcons[cell_index->row];
-      switch (cell_index->row) {
-        case action_info:
-          strcpy(str_temp, kInfoExplanation);
-          break;
-        case action_reset:
-          strcpy(str_temp, kResetExplanation);
-          break;
-      }
-      break;
-    case section_settings:
-      str_title = kSettingsOptions[cell_index->row];
-      n_icon = kSettingsIcons[cell_index->row];
-      switch (cell_index->row) {
-        case menu_backlight:
-          strcpy(str_temp, kMenuValuesBacklight[backlight]);
-          break;
-        case menu_tilt:
-          strcpy(str_temp, kMenuValuesTilt[tilt]);
-          break;
-      }
-      break;
-  }
-  if (str_title) {
-    GBitmap* bitmap_icon = n_icon ? gbitmap_create_with_resource(n_icon) : NULL;
-    menu_cell_basic_draw(context, cell_layer, str_title, str_temp, bitmap_icon);
-    if (bitmap_icon)
-      gbitmap_destroy(bitmap_icon);
-  }
-}
-
-void menu_sync_and_persist(int setting, int value) {
-  //sync_set_value(setting, value);
-  persist_write_int(setting, value);
-}
-
-void menu_select(MenuLayer* menu, MenuIndex* cell_index, void* data) {
-  switch (cell_index->section) {
-    case section_inventory:
-     {int count = 0;
-      for (int i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
-        Object* obj = objects + i;
-        if (obj->inventory)
-          if (count++ == cell_index->row) {
-            //  TODO
-            break;
-          }
-      }
-     }break;
-    case section_actions:
-      switch (cell_index->row) {
-        case action_info:
-          //  initialize help window
-          window_info = window_create();
-          window_set_fullscreen(window_info, true);
-          window_set_background_color(window_info, GColorWhite);
-          window_set_window_handlers(window_info, (WindowHandlers) {
-            .load = info_load,
-            .unload = info_unload
-          });
-          window_stack_push(window_info, true);
-          break;
-        case action_reset:
-          //  TODO:
-          break;
-      }
-      break;
-    case section_settings:
-      switch (cell_index->row) {
-        case menu_backlight:
-          backlight = (backlight + 1) % backlight_count;
-          if (backlight != backlight_on) {
-            light_enable(false);
-            light_enable_interaction();
-          } else
-            light_enable(true);
-          menu_sync_and_persist(setting_backlight, backlight);
-          break;
-        case menu_tilt:
-          tilt = (tilt + 1) % tilt_count;
-          menu_sync_and_persist(setting_tilt, tilt);
-          break;
-      }
-      break;
-  }
-  //  redraw
-  layer_mark_dirty(menu_layer_get_layer(menu_settings));
-}
-
-void menu_load(Window* window) {
-  //  settings menu
-  menu_settings = menu_layer_create(GRect(0, 0, 144, 168));
-  //  set menu callbacks
-  menu_layer_set_callbacks(menu_settings, NULL, (MenuLayerCallbacks) {
-    .get_num_sections = menu_get_num_sections,
-    .get_num_rows = menu_get_num_rows,
-    .get_header_height = menu_get_header_height,
-    .draw_header = menu_draw_header,
-    .draw_row = menu_draw_row,
-    .select_click = menu_select
-  });
-  //  bind the buttons
-  menu_layer_set_click_config_onto_window(menu_settings, window);
-  //  set default selection
-  menu_layer_set_selected_index(menu_settings, menu_index, MenuRowAlignCenter, false);
-  //  add to window
-  layer_add_child(window_get_root_layer(window), menu_layer_get_layer(menu_settings));
-}
-
-void menu_unload(Window* window) {
-  //  remember selection
-  menu_index = menu_layer_get_selected_index(menu_settings);
-  //  free menu layer
-  menu_layer_destroy(menu_settings);
-  menu_settings = NULL;
-  //  free window memory
-  window_destroy(window_settings);
 }
 
 //  accelerometer
@@ -630,31 +304,63 @@ void button_up(ClickRecognizerRef recognizer, void* context) {
 }
 
 void button_select(ClickRecognizerRef recognizer, void* context) {
+  /*  DEBUG  */
+  /*
+  entry_launch(input_safe);
+  return;
+  */
+
   int i, n_margin = kObjectMargin / (1 << n_zoom);
   //  check for selectable objects
   for (i = 0;  i < (int) ARRAY_LENGTH(objects);  i++) {
     Object* obj = objects + i;
-    if (obj->visible && obj->selectable && !obj->inventory &&
+    if (obj->selectable &&
         (pt_location.x >= obj->location.x - n_margin) && (pt_location.x < obj->location.x + obj->size.w + n_margin) &&
         (pt_location.y >= obj->location.y - n_margin) && (pt_location.y < obj->location.y + obj->size.h + n_margin)) {
-      //  select object
-      obj->visible = false;
-      obj->inventory = true;
-      layer_mark_dirty(layer_screen);
-      //  message
-      snprintf(str_temp, sizeof(str_temp), "you now have a %s", obj->name);
-      toast_show(str_temp);
-      APP_LOG(APP_LOG_LEVEL_DEBUG, "object %s selected", obj->name);
-      return;
+      //  selectable object
+      if (obj->visible && !obj->inventory) {
+        //  select object
+        obj->visible = false;
+        obj->inventory = true;
+        //  redraw scene
+        layer_mark_dirty(layer_screen);
+        //  message
+        snprintf(str_temp, sizeof(str_temp), "you now have a %s", obj->name);
+        toast_show(str_temp);
+        APP_LOG(APP_LOG_LEVEL_DEBUG, "object %s selected", obj->name);
+        return;
+      }
     }
   }
   //  check rules
-  for (int i = 0;  i < (int) ARRAY_LENGTH(rules);  i++) {
+  for (i = 0;  i < (int) ARRAY_LENGTH(rules);  i++) {
     Rule* rule = rules + i;
     if ((pt_location.x >= rule->rect.origin.x) && (pt_location.x < rule->rect.origin.x + rule->rect.size.w) &&
         (pt_location.y >= rule->rect.origin.y) && (pt_location.y < rule->rect.origin.y + rule->rect.size.h)) {
-      APP_LOG(APP_LOG_LEVEL_DEBUG, "rule %d triggered", i);
-      //  TODO:
+      //  check for state changes
+      if (rule->changes >= 0) {
+        //  check dependency
+        if ((rule->dependency >= 0) && !states[rule->dependency].value)
+          continue;
+        //  see if rule has an input
+        if (rule->input >= 0) {
+          //  check input state
+          Input* inp = inputs + rule->input;
+          if (!states[inp->changes].value) {
+            //  launch entry screen for input
+            entry_launch(rule->input);
+            return;
+          }
+        }
+        //  changes state value
+        State* state = states + rule->changes;
+        state->value = !state->value;
+        //  message
+        if (state->value && rule->message)
+          toast_show(rule->message);
+        //  redraw scene
+        layer_mark_dirty(layer_screen);
+      }
       return;
     }
   }
@@ -672,14 +378,10 @@ void button_down(ClickRecognizerRef recognizer, void* context) {
 
 void button_long(ClickRecognizerRef recognizer, void* context) {
   //  initialize settings window
-  window_settings = window_create();
-  window_set_fullscreen(window_settings, true);
-  window_set_background_color(window_settings, GColorWhite);
-  window_set_window_handlers(window_settings, (WindowHandlers) {
+  window_settings = window_escape((WindowHandlers) {
     .load = menu_load,
     .unload = menu_unload
-  });
-  window_stack_push(window_settings, true);
+  }, NULL);
 }
 
 void config_provider(void* context) {
@@ -733,21 +435,20 @@ int main(void) {
   pt_location = GPoint(kRoomMaxWidth / 2, kRoomMaxHeight / 2);
   pt_fraction = GPoint(kMaxFraction / 2, kMaxFraction / 2);
   n_zoom = 1;
+  n_position = 0;
   memset(pixels, '\0', sizeof(pixels));
   memset(gauss, '\0', sizeof(gauss));
   memset(&menu_index, '\0', sizeof(menu_index));
+  memset(&states, '\0', sizeof(states));
+  entry = entry_digits;
+  input = -1;
   //  modules
   toast_init();
   //  create window
-  window = window_create();
-  window_set_window_handlers(window, (WindowHandlers) {
+  window = window_escape((WindowHandlers) {
     .load = window_load,
     .unload = window_unload,
-  });
-  window_set_background_color(window, GColorWhite);
-  window_set_fullscreen(window, true);
-  window_set_click_config_provider(window, config_provider);
-  window_stack_push(window, true);
+  }, config_provider);
   //  persistence
   for (int i = setting_backlight;  i <= setting_backlight;  i++) {
     if (persist_exists(i)) {
