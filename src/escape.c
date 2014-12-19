@@ -44,7 +44,7 @@ const uint32_t kRooms[] = {
   RESOURCE_ID_ROOM_5_5, RESOURCE_ID_ROOM_6_5, RESOURCE_ID_ROOM_7_5, RESOURCE_ID_ROOM_8_5, RESOURCE_ID_ROOM_9_5,
   RESOURCE_ID_ROOM_10_5, RESOURCE_ID_ROOM_11_5, RESOURCE_ID_ROOM_12_5, RESOURCE_ID_ROOM_13_5, RESOURCE_ID_ROOM_14_5,
   RESOURCE_ID_ROOM_15_5, RESOURCE_ID_ROOM_16_5 };
-typedef enum { entry_digits = 0 } Entry;
+typedef enum { entry_digits = 0, entry_fruit } Entry;
 const char* kNothingToSelect = "nothing to select here";
 const char* kInfoExplanation = "help text";
 
@@ -71,7 +71,8 @@ typedef struct __attribute__((__packed__)) {
   const char* message;
 } Input;
 static Input inputs[] = {
-  { entry_digits, 0, 1234, state_safe, "the safe is open" }
+    //{ entry_digits, 0, 1234, state_safe, "the safe is open" }
+    { entry_fruit, 0, 1234, state_safe, "the safe is open" }
 };
 
 //  objects

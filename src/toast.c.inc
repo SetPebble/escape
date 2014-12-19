@@ -38,6 +38,7 @@ static void toast_show(const char* message) {
   }
   //  relocate toast
   layer_set_frame(text_layer_get_layer(text_toast), GRect(0, 0, 144, 168));
+  layer_set_bounds(text_layer_get_layer(text_toast), GRect(0, 0, 144, 168));
   //  check parent window
   Window* window_top = window_stack_get_top_window();
 #if  kDebug
@@ -57,7 +58,7 @@ static void toast_show(const char* message) {
   size_toast.h += kToastMargin;
   //  setup status display
   layer_set_frame(text_layer_get_layer(text_toast), GRect((144 - size_toast.w) / 2, -size_toast.h, size_toast.w, size_toast.h));
-  //text_layer_set_size(text_toast, size_toast);    //  makes no difference
+  layer_set_bounds(text_layer_get_layer(text_toast), GRect(0, 0, size_toast.w, size_toast.h));
   //  animate
   animation_toast = property_animation_create_layer_frame(text_layer_get_layer(text_toast), NULL, &GRect((144 - size_toast.w) / 2, 0, size_toast.w, size_toast.h));
   animation_set_duration(&animation_toast->animation, kToastShow);
